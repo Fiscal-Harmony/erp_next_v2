@@ -27,6 +27,8 @@ SIGNATURE_SCHEMA = {
         "properties": {
             "RequestId": {"type": "string"},
             "Success": {"type": "boolean"},
+            "IsActionable": {"type": "boolean"},
+            "Error": {"type": ["string", "null"]},
             "FiscalInvoicePdf": {"type": ["string", "null"]},
             "QrData": {
                 "type": ["object", "null"],  # QrData can be an object or null

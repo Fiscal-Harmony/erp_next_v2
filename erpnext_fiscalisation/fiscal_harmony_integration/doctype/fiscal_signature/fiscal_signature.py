@@ -31,6 +31,10 @@ class FiscalSignature(Document):
         fiscal_harmony_id: DF.Data
         fiscal_harmony_filename: DF.Data
         bypass_tin: DF.Check
+        verification_code: DF.Data
+        fiscal_day: DF.Int
+        device_id: DF.Int
+        invoice_number: DF.Int
 
     @frappe.whitelist()
     def fetch_signing_data(self):

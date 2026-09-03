@@ -29,27 +29,27 @@ if TYPE_CHECKING:
 
 
 @frappe.whitelist()
-def switch_active_company(target_company: str):
-    doc = frappe.get_doc("Fiscal Harmony Settings")  # Load singleton
-    return doc.switch_active_company(target_company)
+def switch_active_branch(branch_name: str):
+    doc = frappe.get_doc("Fiscal Harmony Settings")
+    return doc.switch_active_branch(branch_name)
 
 
 @frappe.whitelist()
 def get_device_info():
-    doc = frappe.get_single("Fiscal Harmony Settings")  # Singleton
+    doc = frappe.get_single("Fiscal Harmony Settings")
     return doc.get_device_info()
 
 
 @frappe.whitelist()
 def check_user_profile():
     doc = frappe.get_doc("Fiscal Harmony Settings")
-    return doc.check_user_profile
+    return doc.check_user_profile()
 
 
 @frappe.whitelist()
-def update_multi_company_details():
+def add_branch(branch_name: str, warehouse: str, api_key: str, api_secret: str):
     doc = frappe.get_doc("Fiscal Harmony Settings")
-    return doc.update_multi_company_details
+    return doc.add_branch(branch_name, warehouse, api_key, api_secret)
 
 
 @frappe.whitelist()
@@ -71,8 +71,13 @@ class FiscalHarmonySettings(Document):
         api_key: DF.Data
         api_secret: DF.Password
         last_successful_request: DF.Datetime
+        disabled: DF.Check
+        include_hs_codes: DF.Check
+        attach_local_print: DF.Check
         currency_mappings: DF.Table
         tax_mappings: DF.Table
+        active_branch: DF.Data
+        branch_configurations: DF.Table
 
     def validate(self):
         """Validate the Fiscal Harmony Settings form data."""
@@ -81,6 +86,17 @@ class FiscalHarmonySettings(Document):
 
         if not re.match(url_regex, self.endpoint):
             frappe.throw("Please enter a valid URL for the endpoint, then try again.")
+
+        # Validate only one branch is active
+        active_count = sum(1 for r in self.branch_configurations if r.is_active)
+        if active_count > 1:
+            frappe.throw("Only one branch can be active at a time.")
+        if self.branch_configurations and active_count == 0:
+            frappe.throw("At least one branch must be set as active.")
+
+        # Sync active branch credentials
+        if self.active_branch:
+            self._sync_active_branch_credentials()
 
     @frappe.whitelist()
     def check_supported_currencies(self):
@@ -449,123 +465,58 @@ class FiscalHarmonySettings(Document):
             },
         )
 
-    # Add these fields to your TYPE_CHECKING section:
-    if TYPE_CHECKING:
-        endpoint: DF.Data
-        user_profile_id: DF.Data
-        api_key: DF.Data
-        api_secret: DF.Password
-        last_successful_request: DF.Datetime
-        currency_mappings: DF.Table
-        tax_mappings: DF.Table
-        # New fields for multi-company support
-        multiple_companies: DF.Check
-        company_1_name: DF.Data
-        company_1_api_key: DF.Data
-        company_1_api_secret: DF.Password
-        company_2_name: DF.Data
-        company_2_api_key: DF.Data
-        company_2_api_secret: DF.Password
-        active_company: DF.Select
+    # ── Branch Management ──────────────────────────────────────────────
 
-    def update_multi_company_details(
-            self,
-            company_1_name: str,
-            company_1_api_key: str,
-            company_1_api_secret: str,
-            company_2_name: str,
-            company_2_api_key: str,
-            company_2_api_secret: str,
-    ):
-        """Update multi-company API details after validation.
+    def switch_active_branch(self, branch_name: str):
+        """Switch the active branch and sync its credentials for fiscalisation.
 
         Args:
-            company_1_name (str): Name for company 1
-            company_1_api_key (str): API key for company 1
-            company_1_api_secret (str): API secret for company 1
-            company_2_name (str): Name for company 2
-            company_2_api_key (str): API key for company 2
-            company_2_api_secret (str): API secret for company 2
-        """
+            branch_name (str): The name of the branch to activate."""
 
-        # Validate company 1 credentials
-        if not self._validate_company_credentials(company_1_api_key, company_1_api_secret):
-            frappe.throw(f"Invalid API credentials for {company_1_name}")
+        # Find the target branch
+        target_branch = None
+        for row in self.branch_configurations:
+            if row.branch_name == branch_name:
+                target_branch = row
+                break
 
-        # Validate company 2 credentials
-        if not self._validate_company_credentials(company_2_api_key, company_2_api_secret):
-            frappe.throw(f"Invalid API credentials for {company_2_name}")
+        if not target_branch:
+            frappe.throw(f'Branch "{branch_name}" not found.')
 
-        # Save company details
-        self.company_1_name = company_1_name
-        self.company_1_api_key = company_1_api_key
-        self.company_1_api_secret = company_1_api_secret
-        self.company_2_name = company_2_name
-        self.company_2_api_key = company_2_api_key
-        self.company_2_api_secret = company_2_api_secret
+        # Get current branch info for logging
+        current_branch_name = self.active_branch or "None"
+        current_api_key = ""
+        for row in self.branch_configurations:
+            if row.is_active:
+                current_api_key = row.api_key or ""
+                break
 
-        # Set active company to 1 if not already set
-        if not self.active_company:
-            self.active_company = "1"
-
-        # Update main API credentials to active company
-        self._sync_active_company_credentials()
-
-        self.save()
-        return True
-
-    def switch_active_company(self, target_company: str):
-        """Switch the active company and update main API credentials.
-
-        Args:
-            target_company (str): Target company number ("1" or "2")
-        """
-
-        if not self.multiple_companies:
-            frappe.throw("Multiple companies mode is not enabled.")
-
-        if target_company not in ["1", "2"]:
-            frappe.throw("Invalid company selection. Must be 1 or 2.")
-
-        # Get current company info for logging
-        current_company = self.active_company or "1"
-        current_company_name = getattr(self, f"company_{current_company}_name", f"Company {current_company}")
-        current_api_key = getattr(self, f"company_{current_company}_api_key", "")
-
-        # Verify target company has credentials
-        target_api_key = getattr(self, f"company_{target_company}_api_key")
-        target_api_secret = getattr(self, f"company_{target_company}_api_secret")
-        target_company_name = getattr(self, f"company_{target_company}_name", f"Company {target_company}")
-
-        if not (target_api_key and target_api_secret):
-            frappe.throw(f"No API credentials configured for {target_company_name}")
-
-        # Log the company switch attempt
+        # Log the switch attempt
         log_data: FiscalHarmonyLogData = {
-            "request_url": "internal://switch_active_company",
+            "request_url": "internal://switch_active_branch",
             "payload": json.dumps({
-                "action": "switch_company",
-                "from_company": current_company,
-                "from_company_name": current_company_name,
-                "from_api_key": current_api_key[-8:] if current_api_key else "None",  # Last 8 chars for security
-                "to_company": target_company,
-                "to_company_name": target_company_name,
-                "to_api_key": target_api_key[-8:] if target_api_key else "None",  # Last 8 chars for security
-                "Api secret":target_api_secret,
+                "action": "switch_branch",
+                "from_branch": current_branch_name,
+                "to_branch": branch_name,
+                "to_warehouse": target_branch.warehouse,
+                "to_api_key_suffix": target_branch.api_key[-8:] if target_branch.api_key else "None",
                 "timestamp": datetime.now().isoformat(),
-                "user": frappe.session.user
+                "user": frappe.session.user,
             }, indent=2),
-            "status": "In Progress"
+            "status": "In Progress",
         }
 
         try:
-            # Update active company
-            self.active_company = target_company
+            # Deactivate all branches, activate the target
+            for row in self.branch_configurations:
+                row.is_active = (row.branch_name == branch_name)
 
-            # Sync main credentials with active company
-            self._sync_active_company_credentials()
+            # Sync active branch credentials into main fields
+            self.active_branch = branch_name
+            self.api_key = target_branch.api_key
+            self.api_secret = target_branch.api_secret
 
-            # Clear user profile ID as it may be different for the new company
+            # Clear user profile ID as it may differ per branch
             old_user_profile_id = self.user_profile_id
             self.user_profile_id = ""
 
@@ -574,45 +525,54 @@ class FiscalHarmonySettings(Document):
             # Update log with success
             log_data["status"] = "Success"
             log_data["response"] = json.dumps({
-                "result": "Company switched successfully",
-                "new_active_company": target_company,
-                "new_company_name": target_company_name,
+                "result": "Branch switched successfully",
+                "new_active_branch": branch_name,
                 "old_user_profile_id": old_user_profile_id,
-                "new_user_profile_id": self.user_profile_id
+                "new_user_profile_id": self.user_profile_id,
             }, indent=2)
             log_data["response_status_code"] = 200
 
-            # Log the successful switch
             fh_log(log_data)
 
-            frappe.msgprint(f"Successfully switched from {current_company_name} to {target_company_name}")
+            frappe.msgprint(
+                f"Successfully switched active branch to {branch_name}"
+            )
 
             return True
 
         except Exception as e:
-            # Log the failure
             log_data["status"] = "Failure"
-            log_data["error_details"] = f"Failed to switch company: {str(e)}"
+            log_data["error_details"] = f"Failed to switch branch: {str(e)}"
             log_data["response_status_code"] = 500
             log_data["response"] = json.dumps({
                 "error": str(e),
-                "attempted_switch": f"{current_company_name} -> {target_company_name}"
+                "attempted_switch": f"{current_branch_name} -> {branch_name}",
             }, indent=2)
 
             fh_log(log_data)
-
-            # Re-raise the exception
             raise
-    def _validate_company_credentials(self, api_key: str, api_secret: str) -> bool:
-        """Validate company API credentials against Fiscal Harmony.
+
+    def _sync_active_branch_credentials(self):
+        """Sync main api_key/api_secret from the active branch row."""
+
+        if not self.active_branch:
+            return
+
+        for row in self.branch_configurations:
+            if row.branch_name == self.active_branch:
+                self.api_key = row.api_key
+                self.api_secret = row.api_secret
+                return
+
+    def _validate_branch_credentials(self, api_key: str, api_secret: str) -> bool:
+        """Validate branch API credentials against Fiscal Harmony.
 
         Args:
-            api_key (str): The API key to validate
-            api_secret (str): The API secret to validate
+            api_key (str): The API key to validate.
+            api_secret (str): The API secret to validate.
 
         Returns:
-            bool: True if credentials are valid, False otherwise
-        """
+            bool: True if credentials are valid, False otherwise."""
 
         headers = self.__get_headers(api_key)
 
@@ -626,59 +586,133 @@ class FiscalHarmonySettings(Document):
         except (TimeoutError, requests.exceptions.RequestException):
             return False
 
-    def _sync_active_company_credentials(self):
-        """Sync main API credentials with the active company's credentials."""
+    @frappe.whitelist()
+    def add_branch(self, branch_name: str, warehouse: str, api_key: str, api_secret: str):
+        """Add a new branch configuration.
 
-        if not self.multiple_companies or not self.active_company:
-            return
+        Args:
+            branch_name (str): Name/label for the branch.
+            warehouse (str): Link to the ERPNext Warehouse for this branch.
+            api_key (str): API key for the branch.
+            api_secret (str): API secret for the branch."""
 
-        active_company = self.active_company
-        self.api_key = getattr(self, f"company_{active_company}_api_key")
-        self.api_secret = getattr(self, f"company_{active_company}_api_secret")
+        # Check for duplicate branch name
+        for row in self.branch_configurations:
+            if row.branch_name == branch_name:
+                frappe.throw(f'A branch named "{branch_name}" already exists.')
 
-    def validate(self):
-        """Validate the Fiscal Harmony Settings form data."""
+        # Check for duplicate warehouse
+        for row in self.branch_configurations:
+            if row.warehouse == warehouse:
+                frappe.throw(f'Warehouse "{warehouse}" is already linked to another branch.')
 
-        # Original validation
-        url_regex = r"^https://[a-z]+\.([a-z]+\.)*(co\.zw|com)/[a-z]+$"
+        # Validate credentials
+        if not self._validate_branch_credentials(api_key, api_secret):
+            frappe.throw(
+                f"Invalid API credentials for branch \"{branch_name}\". "
+                "Please verify the API key and secret."
+            )
 
-        if not re.match(url_regex, self.endpoint):
-            frappe.throw("Please enter a valid URL for the endpoint, then try again.")
+        # Append new branch
+        new_branch = self.append("branch_configurations", {
+            "branch_name": branch_name,
+            "warehouse": warehouse,
+            "api_key": api_key,
+            "api_secret": api_secret,
+            "is_active": 0,
+        })
 
-        # Multi-company validation
-        if self.multiple_companies:
-            if not (self.company_1_name and self.company_2_name):
-                frappe.throw("Both company names are required when multiple companies is enabled.")
+        # If this is the first branch, make it active
+        if len(self.branch_configurations) == 1:
+            new_branch.is_active = 1
+            self.active_branch = branch_name
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.user_profile_id = ""
 
-            if not (self.company_1_api_key and self.company_1_api_secret and
-                    self.company_2_api_key and self.company_2_api_secret):
-                frappe.throw("API credentials for both companies are required when multiple companies is enabled.")
+        self.save()
 
-            # Sync main credentials if active company is set
-            if self.active_company:
-                self._sync_active_company_credentials()
+        frappe.msgprint(f"Branch \"{branch_name}\" added successfully.")
 
     @frappe.whitelist()
-    def get_active_company_info(self):
-        """Get information about the currently active company.
+    def remove_branch(self, branch_name: str):
+        """Remove a branch configuration.
+
+        Args:
+            branch_name (str): The name of the branch to remove."""
+
+        if branch_name == self.active_branch:
+            frappe.throw(
+                "Cannot remove the active branch. "
+                "Switch to another branch first."
+            )
+
+        target_idx = None
+        for idx, row in enumerate(self.branch_configurations):
+            if row.branch_name == branch_name:
+                target_idx = idx
+                break
+
+        if target_idx is None:
+            frappe.throw(f'Branch "{branch_name}" not found.')
+
+        self.branch_configurations.pop(target_idx)
+        self.save()
+
+        frappe.msgprint(f"Branch \"{branch_name}\" removed.")
+
+    @frappe.whitelist()
+    def update_active_branch_credentials(self, api_key: str, api_secret: str):
+        """Update the active branch's API credentials.
+
+        Args:
+            api_key (str): New API key.
+            api_secret (str): New API secret."""
+
+        if not self.active_branch:
+            frappe.throw("No active branch configured.")
+
+        # Validate the new credentials
+        if not self._validate_branch_credentials(api_key, api_secret):
+            frappe.throw("Invalid API credentials. Please verify the API key and secret.")
+
+        # Update the active branch row
+        for row in self.branch_configurations:
+            if row.branch_name == self.active_branch:
+                row.api_key = api_key
+                row.api_secret = api_secret
+                break
+
+        # Sync to main fields
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.save()
+
+        frappe.msgprint(
+            "Active branch credentials updated successfully.",
+            "Update Branch Credentials",
+        )
+
+    @frappe.whitelist()
+    def get_active_branch_info(self):
+        """Get information about the currently active branch.
 
         Returns:
-            dict: Information about the active company
-        """
-
-        if not self.multiple_companies:
-            return {"single_company_mode": True}
-
-        active_company = self.active_company or "1"
-        company_name = getattr(self, f"company_{active_company}_name", f"Company {active_company}")
+            dict: Information about the active branch and all branches."""
 
         return {
-            "multiple_companies": True,
-            "active_company": active_company,
-            "active_company_name": company_name,
-            "company_1_name": self.company_1_name,
-            "company_2_name": self.company_2_name,
+            "active_branch": self.active_branch,
+            "branches": [
+                {
+                    "name": r.branch_name,
+                    "warehouse": r.warehouse,
+                    "is_active": r.is_active,
+                }
+                for r in self.branch_configurations
+            ],
         }
+
+    # ── Private Helpers ────────────────────────────────────────────────
 
     def __encode_data(self, data: dict) -> str:
         """Encodes the given data as a valid JSON string for transmitting.
@@ -753,12 +787,9 @@ class FiscalHarmonySettings(Document):
         return f"{self.endpoint}/{route}"
 
     def __get_headers(self, api_key: str | None = None) -> dict[str, str]:
-        """Generate headers using the active company's API key."""
+        """Generate headers using the active branch's API key."""
 
-        if self.multiple_companies and self.active_company:
-            api_key = getattr(self, f"company_{self.active_company}_api_key")
-        else:
-            api_key = self.api_key if api_key is None else api_key
+        api_key = self.api_key if api_key is None else api_key
 
         return {
             "X-Api-Key": api_key,
@@ -767,15 +798,10 @@ class FiscalHarmonySettings(Document):
         }
 
     def __get_signed_headers(self, payload: str) -> dict[str, str]:
-        """Generate signed headers using the active company's credentials."""
+        """Generate signed headers using the active branch's credentials."""
 
-        if self.multiple_companies and self.active_company:
-            api_key = getattr(self, f"company_{self.active_company}_api_key")
-            api_secret = self.get_password(f"company_{self.active_company}_api_secret")
-
-        else:
-            api_key = self.api_key
-            api_secret = self.get_password("api_secret")
+        api_key = self.api_key
+        api_secret = self.get_password("api_secret")
 
         signature = self.__sign_payload(payload, api_secret)
 
@@ -788,7 +814,7 @@ class FiscalHarmonySettings(Document):
         }
 
     def __process_mappings(self, route_name: str, mapping_dict: dict[str, str]):
-        """Processes changes made to the mappaing tables.
+        """Processes changes made to the mapping tables.
 
         Args:
             route_name (str): The path for the mapping in Fiscal Harmony.\

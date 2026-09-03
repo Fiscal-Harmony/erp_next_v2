@@ -15,43 +15,10 @@ frappe.ui.form.on("Fiscal Harmony Settings", {
       );
     });
 
-    // Only show switch org if multi-company is enabled
-    if (frm.doc.multiple_companies) {
-      frm.add_custom_button(__("Switch Organisation"), () => switchUserOrg(frm));
-    }
-
-    // Trigger once, but avoid infinite refresh
-    if (!frm.__initial_triggered) {
-      frm.__initial_triggered = true;
-      frm.trigger("multiple_companies");
-    }
-  },
-
-  multiple_companies(frm) {
-    // Avoid refreshing everything — just update fields
-    if (frm.doc.multiple_companies) {
-      if (!frm.doc.company_1_name && (frm.doc.api_key || frm.doc.api_secret)) {
-        frm.set_value('company_1_name', 'Company 1');
-        frm.set_value('company_1_api_key', frm.doc.api_key);
-        frm.set_value('company_1_api_secret', frm.doc.api_secret);
-        frm.set_value('active_company', '1');
-      }
-    } else {
-      frm.set_value('company_1_name', '');
-      frm.set_value('company_1_api_key', '');
-      frm.set_value('company_1_api_secret', '');
-      frm.set_value('company_2_name', '');
-      frm.set_value('company_2_api_key', '');
-      frm.set_value('company_2_api_secret', '');
-      frm.set_value('active_company', '');
-    }
-
-    // Refresh only the relevant fields
-    frm.refresh_fields([
-      'company_1_name', 'company_1_api_key', 'company_1_api_secret',
-      'company_2_name', 'company_2_api_key', 'company_2_api_secret',
-      'active_company'
-    ]);
+    // Branch management buttons
+    frm.add_custom_button(__("Add Branch"), () => addBranch(frm));
+    frm.add_custom_button(__("Switch Active Branch"), () => switchActiveBranch(frm));
+    frm.add_custom_button(__("Remove Branch"), () => removeBranch(frm));
   },
 
   check_supported_currencies(frm) {
@@ -90,18 +57,141 @@ frappe.ui.form.on("Fiscal Harmony Settings", {
 });
 
 /**
- * Handle API token update prompt
+ * Add a new branch configuration
  */
-const updateApiToken = (frm) => {
+const addBranch = (frm) => {
+  frappe.prompt([
+    {
+      label: "Branch Name",
+      fieldname: "branch_name",
+      fieldtype: "Data",
+      reqd: true
+    },
+    {
+      label: "Warehouse",
+      fieldname: "warehouse",
+      fieldtype: "Link",
+      options: "Warehouse",
+      reqd: true,
+      description: "The ERPNext Warehouse linked to this branch"
+    },
+    {
+      label: "API Key",
+      fieldname: "api_key",
+      fieldtype: "Data",
+      reqd: true
+    },
+    {
+      label: "API Secret",
+      fieldname: "api_secret",
+      fieldtype: "Password",
+      reqd: true
+    }
+  ], (values) => {
+    if (!validateApiCredentials(values.api_key, values.api_secret)) return;
 
-  if (frm.doc.multiple_companies) {
-    updateMultiCompanyApiTokens(frm);
-  } else {
-    updateSingleCompanyApiToken(frm);
-  }
+    frappe.call({
+      method: "add_branch",
+      doc: frm.doc,
+      args: {
+        branch_name: values.branch_name,
+        warehouse: values.warehouse,
+        api_key: values.api_key,
+        api_secret: values.api_secret
+      },
+      callback: () => frm.reload_doc()
+    });
+  }, "Add Branch Configuration", "Submit");
 };
 
-const updateSingleCompanyApiToken = (frm) => {
+/**
+ * Switch the active branch
+ */
+const switchActiveBranch = (frm) => {
+  const branches = frm.doc.branch_configurations || [];
+
+  if (branches.length === 0) {
+    frappe.msgprint("No branches configured. Please add a branch first.");
+    return;
+  }
+
+  const branchNames = branches.map(r => r.branch_name);
+
+  frappe.prompt({
+    label: "Select Branch",
+    fieldname: "target_branch",
+    fieldtype: "Select",
+    options: branchNames.join("\n"),
+    reqd: true
+  }, (values) => {
+    const currentBranch = frm.doc.active_branch || "None";
+    frappe.confirm(
+      `Switch active branch from <strong>${currentBranch}</strong> to <strong>${values.target_branch}</strong>?<br><br>This will change the API credentials used for fiscalisation.`,
+      () => {
+        frappe.call({
+          method: "switch_active_branch",
+          doc: frm.doc,
+          args: {
+            branch_name: values.target_branch
+          },
+          callback: () => {
+            frappe.show_alert({
+              message: `Switched to branch: ${values.target_branch}`,
+              indicator: "green"
+            });
+            frm.reload_doc();
+          }
+        });
+      }
+    );
+  }, "Switch Active Branch");
+};
+
+/**
+ * Remove a branch configuration
+ */
+const removeBranch = (frm) => {
+  const branches = frm.doc.branch_configurations || [];
+
+  if (branches.length === 0) {
+    frappe.msgprint("No branches configured.");
+    return;
+  }
+
+  const branchNames = branches.map(r => r.branch_name);
+
+  frappe.prompt({
+    label: "Branch to Remove",
+    fieldname: "target_branch",
+    fieldtype: "Select",
+    options: branchNames.join("\n"),
+    reqd: true
+  }, (values) => {
+    if (values.target_branch === frm.doc.active_branch) {
+      frappe.throw("Cannot remove the active branch. Switch to another branch first.");
+      return;
+    }
+
+    frappe.confirm(
+      `Remove branch <strong>${values.target_branch}</strong>?`,
+      () => {
+        frappe.call({
+          method: "remove_branch",
+          doc: frm.doc,
+          args: {
+            branch_name: values.target_branch
+          },
+          callback: () => frm.reload_doc()
+        });
+      }
+    );
+  }, "Remove Branch");
+};
+
+/**
+ * Update the active branch's API token
+ */
+const updateApiToken = (frm) => {
   frappe.prompt([
     {
       label: "API Key",
@@ -120,109 +210,20 @@ const updateSingleCompanyApiToken = (frm) => {
     if (!validateApiCredentials(values.api_key, values.api_secret)) return;
 
     frappe.call({
-      method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.validate_api_details",
+      method: "update_active_branch_credentials",
+      doc: frm.doc,
       args: {
-        name: frm.doc.name,
         api_key: values.api_key,
         api_secret: values.api_secret
       },
       callback: () => frm.reload_doc()
     });
-  }, "Update API Key & Secret", "Submit");
+  }, "Update Active Branch API Token", "Submit");
 };
 
-const updateMultiCompanyApiTokens = (frm) => {
-  frappe.prompt([
-    { fieldtype: "Section Break", label: "Company 1 Details", fieldname: "company_1_section" },
-    {
-      label: "Company 1 Name", fieldname: "company_1_name", fieldtype: "Data", reqd: true,
-      default: frm.doc.company_1_name || "Company 1"
-    },
-    {
-      label: "Company 1 API Key", fieldname: "company_1_api_key", fieldtype: "Data", reqd: true,
-      default: frm.doc.company_1_api_key
-    },
-    {
-      label: "Company 1 API Secret", fieldname: "company_1_api_secret", fieldtype: "Password", reqd: true
-    },
-    { fieldtype: "Section Break", label: "Company 2 Details", fieldname: "company_2_section" },
-    {
-      label: "Company 2 Name", fieldname: "company_2_name", fieldtype: "Data", reqd: true,
-      default: frm.doc.company_2_name || "Company 2"
-    },
-    {
-      label: "Company 2 API Key", fieldname: "company_2_api_key", fieldtype: "Data", reqd: true,
-      default: frm.doc.company_2_api_key
-    },
-    {
-      label: "Company 2 API Secret", fieldname: "company_2_api_secret", fieldtype: "Password", reqd: true
-    }
-  ], (values) => {
-    if (!validateApiCredentials(values.company_1_api_key, values.company_1_api_secret)) {
-      frappe.throw("Please provide valid API credentials for Company 1.");
-    }
-    if (!validateApiCredentials(values.company_2_api_key, values.company_2_api_secret)) {
-      frappe.throw("Please provide valid API credentials for Company 2.");
-    }
-
-    frappe.call({
-      method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.update_multi_company_details",
-      args: {
-        name: frm.doc.name,
-        company_1_name: values.company_1_name,
-        company_1_api_key: values.company_1_api_key,
-        company_1_api_secret: values.company_1_api_secret,
-        company_2_name: values.company_2_name,
-        company_2_api_key: values.company_2_api_key,
-        company_2_api_secret: values.company_2_api_secret
-      },
-      callback: (r) => {
-        if (r.message) {
-          frappe.msgprint("Multi-company API details updated successfully.");
-          frm.reload_doc();
-        }
-      }
-    });
-  }, "Update Multi-Company API Details", "Submit");
-};
-
-const switchUserOrg = (frm) => {
-  if (!frm.doc.multiple_companies) {
-    frappe.msgprint("Multiple companies mode is not enabled.");
-    return;
-  }
-
-  if (!(frm.doc.company_1_api_key && frm.doc.company_2_api_key)) {
-    frappe.msgprint("Please configure API keys for both companies first.");
-    return;
-  }
-
-  const current = parseInt(frm.doc.active_company || "1");
-  const next = current === 1 ? 2 : 1;
-
-  const currentName = current === 1 ? frm.doc.company_1_name : frm.doc.company_2_name;
-  const nextName = next === 1 ? frm.doc.company_1_name : frm.doc.company_2_name;
-
-  frappe.confirm(
-    `Switch from <strong>${currentName}</strong> to <strong>${nextName}</strong>?<br><br>This will change the active API credentials.`,
-    () => {
-      frappe.call({
-        method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.switch_active_company",
-        args: {
-          name: frm.doc.name,
-          target_company: next
-        },
-        callback: (r) => {
-          if (r.message) {
-            frappe.show_alert({ message: `Switched to ${nextName}`, indicator: "green" });
-            frm.reload_doc();
-          }
-        }
-      });
-    }
-  );
-};
-
+/**
+ * Validate API credential format
+ */
 const validateApiCredentials = (key, secret) => {
   const keyRegex = /^[A-Z\d]{32}$/;
   const secretRegex = /^[a-zA-Z\d\/\+]{86}==$/;
@@ -240,6 +241,9 @@ const validateApiCredentials = (key, secret) => {
   return true;
 };
 
+/**
+ * Check user profile
+ */
 const checkUserProfile = (frm) => {
   if (!(frm.doc.api_key && frm.doc.api_secret) || frm.is_dirty()) return;
 
@@ -249,7 +253,7 @@ const checkUserProfile = (frm) => {
       name: frm.doc.name
     },
     callback: function (r) {
-      if (!r.exc) { // no server exception
+      if (!r.exc) {
         frappe.msgprint(__('User profile check successful.'));
         frm.reload_doc();
       }
@@ -257,7 +261,9 @@ const checkUserProfile = (frm) => {
   });
 };
 
-
+/**
+ * Get device info
+ */
 const getDeviceInfo = (frm) => {
   if (!(frm.doc.api_key && frm.doc.api_secret) || frm.is_dirty()) return;
 

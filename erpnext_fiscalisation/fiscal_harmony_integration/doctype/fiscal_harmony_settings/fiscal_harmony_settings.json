@@ -18,19 +18,10 @@
   "api_key",
   "column_break_iofx",
   "api_secret",
-  "multiple_companies_section",
-  "multiple_companies",
-  "active_company",
-  "company_1_section",
-  "company_1_name",
-  "company_1_column",
-  "company_1_api_key",
-  "company_1_api_secret",
-  "company_2_section",
-  "company_2_name",
-  "company_2_column",
-  "company_2_api_key",
-  "company_2_api_secret",
+  "branch_section",
+  "active_branch",
+  "branch_column",
+  "branch_configurations",
   "currency_mappings_section",
   "check_supported_currencies",
   "validate_currency_mappings",
@@ -156,82 +147,26 @@
    "label": "Attach Local Print"
   },
   {
-    "fieldname": "multiple_companies_section",
-    "fieldtype": "Section Break",
-    "label": "Multi-Company Configuration"
+   "fieldname": "branch_section",
+   "fieldtype": "Section Break",
+   "label": "Branch Configuration"
   },
   {
-    "default": "0",
-    "description": "Enable this to configure API keys for multiple companies and switch between them",
-    "fieldname": "multiple_companies",
-    "fieldtype": "Check",
-    "label": "Enable Multiple Companies"
+   "fieldname": "active_branch",
+   "fieldtype": "Data",
+   "label": "Active Branch",
+   "read_only": 1,
+   "bold": 1
   },
   {
-    "depends_on": "multiple_companies",
-    "fieldname": "active_company",
-    "fieldtype": "Select",
-    "label": "Active Company",
-    "options": "1\n2",
-    "read_only": 1
+   "fieldname": "branch_column",
+   "fieldtype": "Column Break"
   },
   {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_1_section",
-    "fieldtype": "Section Break",
-    "label": "Company 1 Configuration"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_1_name",
-    "fieldtype": "Data",
-    "label": "Company 1 Name"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_1_column",
-    "fieldtype": "Column Break"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_1_api_key",
-    "fieldtype": "Data",
-    "label": "Company 1 API Key"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_1_api_secret",
-    "fieldtype": "Password",
-    "label": "Company 1 API Secret"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_2_section",
-    "fieldtype": "Section Break",
-    "label": "Company 2 Configuration"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_2_name",
-    "fieldtype": "Data",
-    "label": "Company 2 Name"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_2_column",
-    "fieldtype": "Column Break"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_2_api_key",
-    "fieldtype": "Data",
-    "label": "Company 2 API Key"
-  },
-  {
-    "depends_on": "multiple_companies",
-    "fieldname": "company_2_api_secret",
-    "fieldtype": "Password",
-    "label": "Company 2 API Secret"
+   "fieldname": "branch_configurations",
+   "fieldtype": "Table",
+   "label": "Branch Configurations",
+   "options": "Fiscal Harmony Branch Config"
   }
  ],
  "index_web_pages_for_search": 1,
