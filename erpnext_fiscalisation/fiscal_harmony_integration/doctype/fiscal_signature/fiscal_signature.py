@@ -189,7 +189,7 @@ class FiscalSignature(Document):
             "InvoiceNumber": transaction.name,
             "Reference": transaction.po_no,
             "IsDiscounted": bool(transaction.is_discounted),
-            "IsTaxInclusive": True,
+            "IsTaxInclusive": any(tax.included_in_print_rate for tax in transaction.taxes),
             "BuyerContact": buyer_contact,
             "Date": self.__create_timestamp(
                 transaction.posting_date,
@@ -222,7 +222,7 @@ class FiscalSignature(Document):
             "CreditNoteNumber": transaction.name,
             "OriginalInvoiceId": transaction.return_against,
             "Reference": transaction.return_reason,
-            "IsTaxInclusive": True,
+            "IsTaxInclusive": any(tax.included_in_print_rate for tax in transaction.taxes),
             "BuyerContact": buyer_contact,
             "Date": self.__create_timestamp(
                 transaction.posting_date,
