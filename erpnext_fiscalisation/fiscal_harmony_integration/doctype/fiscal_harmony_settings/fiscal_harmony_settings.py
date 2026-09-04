@@ -58,6 +58,60 @@ def validate_api_details(api_key, api_secret):
     return doc.validate_api_details(api_key, api_secret)
 
 
+@frappe.whitelist()
+def check_supported_currencies():
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    return doc.check_supported_currencies()
+
+
+@frappe.whitelist()
+def validate_currency_mappings():
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    return doc.validate_currency_mappings()
+
+
+@frappe.whitelist()
+def validate_tax_mappings():
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    return doc.validate_tax_mappings()
+
+
+@frappe.whitelist()
+def fetch_applicable_taxes():
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    return doc.fetch_applicable_taxes()
+
+
+@frappe.whitelist()
+def save_tax_mappings(mappings):
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    if isinstance(mappings, str):
+        mappings = json.loads(mappings)
+    doc.tax_mappings = []
+    for row in mappings:
+        doc.append("tax_mappings", row)
+    doc.save()
+    return True
+
+
+@frappe.whitelist()
+def fetch_supported_currencies():
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    return doc.fetch_supported_currencies()
+
+
+@frappe.whitelist()
+def save_currency_mappings(mappings):
+    doc = frappe.get_single("Fiscal Harmony Settings")
+    if isinstance(mappings, str):
+        mappings = json.loads(mappings)
+    doc.currency_mappings = []
+    for row in mappings:
+        doc.append("currency_mappings", row)
+    doc.save()
+    return True
+
+
 class FiscalHarmonySettings(Document):
     """This doctype manages interactions with the Fiscal Harmony API."""
 
@@ -98,7 +152,6 @@ class FiscalHarmonySettings(Document):
         if self.active_branch:
             self._sync_active_branch_credentials()
 
-    @frappe.whitelist()
     def check_supported_currencies(self):
         """Display a list of currency codes supported by Fiscal Harmony."""
 
@@ -113,6 +166,28 @@ class FiscalHarmonySettings(Document):
         message += "</ul>"
 
         frappe.msgprint(message)
+
+    def fetch_supported_currencies(self):
+        """Fetch supported currencies from Fiscal Harmony.
+
+        Returns:
+            list[str]: List of supported currency codes."""
+
+        response = self.__make_request("/currencymapping/supported-currencies")
+        if not response.ok:
+            frappe.throw(
+                "Failed to fetch supported currencies.",
+                title=FiscalHarmonySettings.__ERROR_TITLE,
+            )
+
+        text = response.text.strip()
+        if text.startswith("["):
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return [c.strip().strip('"') for c in text.split(",") if c.strip()]
 
     def check_user_profile(self):
         """Updates the Fiscal Harmony user profile."""
@@ -379,6 +454,69 @@ class FiscalHarmonySettings(Document):
 
         frappe.msgprint(message, "Fiscal Device Info")
 
+    def fetch_applicable_taxes(self):
+        """Fetch applicable taxes from the Fiscal Harmony device.
+
+        Returns:
+            list[dict]: List of applicable taxes with taxID, taxName, taxPercent."""
+
+        response = self.__make_request("/fiscaldevice")
+        if not response.ok:
+            frappe.throw(
+                "Failed to fetch applicable taxes from device.",
+                title=FiscalHarmonySettings.__ERROR_TITLE,
+            )
+
+        try:
+            device_data = response.json()
+        except (json.JSONDecodeError, ValueError):
+            frappe.throw(
+                "Invalid response from Fiscal Harmony device.",
+                title=FiscalHarmonySettings.__ERROR_TITLE,
+            )
+
+        current_config = device_data.get("CurrentConfig", {})
+        if isinstance(current_config, str):
+            try:
+                current_config = json.loads(current_config)
+            except (json.JSONDecodeError, ValueError):
+                current_config = {}
+
+        # Handle nested structure: applicableTaxes may be a dict with an
+        # inner "applicableTaxes" key, or a list directly, or a string.
+        # The API uses lowercase keys.
+        applicable_taxes = current_config.get(
+            "applicableTaxes", current_config.get("ApplicableTaxes", [])
+        )
+
+        if isinstance(applicable_taxes, str):
+            try:
+                applicable_taxes = json.loads(applicable_taxes)
+            except (json.JSONDecodeError, ValueError):
+                applicable_taxes = []
+
+        if isinstance(applicable_taxes, dict):
+            applicable_taxes = applicable_taxes.get(
+                "applicableTaxes", applicable_taxes.get("ApplicableTaxes", [])
+            )
+
+        # Unwrap individual tax items that may themselves be dicts
+        # with an inner "applicableTaxes" key
+        result = []
+        for tax in applicable_taxes:
+            if isinstance(tax, dict):
+                # Check if the tax item is itself a wrapper
+                if "applicableTaxes" in tax:
+                    inner = tax["applicableTaxes"]
+                    if isinstance(inner, dict):
+                        result.append(inner)
+                    elif isinstance(inner, list):
+                        result.extend(inner)
+                elif "taxID" in tax:
+                    result.append(tax)
+
+        return result
+
     def test_signature(self, received_signature: str, raw_data: str) -> bool:
         """Validate that the received signature is correct for the data received.
 
@@ -441,7 +579,6 @@ class FiscalHarmonySettings(Document):
             "Authentication Validated",
         )
 
-    @frappe.whitelist()
     def validate_currency_mappings(self):
         """Validate the currency mappings."""
 
@@ -453,7 +590,6 @@ class FiscalHarmonySettings(Document):
             },
         )
 
-    @frappe.whitelist()
     def validate_tax_mappings(self):
         """Validate the tax mappings."""
 
@@ -467,6 +603,7 @@ class FiscalHarmonySettings(Document):
 
     # ── Branch Management ──────────────────────────────────────────────
 
+    @frappe.whitelist()
     def switch_active_branch(self, branch_name: str):
         """Switch the active branch and sync its credentials for fiscalisation.
 
@@ -748,7 +885,10 @@ class FiscalHarmonySettings(Document):
                 timeout=FiscalHarmonySettings.__TIMEOUT,
             )
             log_data["response_status_code"] = response.status_code
-            log_data["response"] = json.dumps(response.json(), indent=2)
+            try:
+                log_data["response"] = json.dumps(response.json(), indent=2)
+            except (json.JSONDecodeError, ValueError):
+                log_data["response"] = response.text[:2000] if response.text else ""
             response.raise_for_status()
 
             log_data["status"] = "Success"

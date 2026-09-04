@@ -19,6 +19,10 @@ frappe.ui.form.on("Fiscal Harmony Settings", {
     frm.add_custom_button(__("Add Branch"), () => addBranch(frm));
     frm.add_custom_button(__("Switch Active Branch"), () => switchActiveBranch(frm));
     frm.add_custom_button(__("Remove Branch"), () => removeBranch(frm));
+
+    // Tax & Currency mapping buttons
+    frm.add_custom_button(__("Fetch & Map Taxes"), () => fetchAndMapTaxes(frm)).addClass("btn-primary-dark");
+    frm.add_custom_button(__("Fetch & Map Currencies"), () => fetchAndMapCurrencies(frm)).addClass("btn-primary-dark");
   },
 
   check_supported_currencies(frm) {
@@ -274,4 +278,282 @@ const getDeviceInfo = (frm) => {
     },
     callback: () => frm.reload_doc()
   });
+};
+
+/**
+ * Fetch applicable taxes from Fiscal Harmony device and show mapping dialog
+ */
+const fetchAndMapTaxes = (frm) => {
+  if (!(frm.doc.api_key && frm.doc.api_secret) || frm.is_dirty()) return;
+
+  frappe.call({
+    method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.fetch_applicable_taxes",
+    args: {
+      name: frm.doc.name
+    },
+    callback: function (r) {
+      if (r.exc || !r.message) {
+        frappe.msgprint(__("Failed to fetch applicable taxes from device."));
+        return;
+      }
+      if (r.message.length === 0) {
+        frappe.msgprint(__("No applicable taxes found on the device."));
+        return;
+      }
+      showTaxMappingDialog(frm, r.message);
+    }
+  });
+};
+
+/**
+ * Show dialog to map ERPNext taxes against ZIMRA taxes
+ */
+const showTaxMappingDialog = (frm, availableTaxes) => {
+  const existingMappings = frm.doc.tax_mappings || [];
+
+  const fields = [
+    {
+      fieldname: "info_html",
+      fieldtype: "HTML",
+      options: `<div class="text-muted" style="margin-bottom: 12px;">
+        ${__("Map only the taxes you use. Leave the others blank. Existing mappings will be replaced.")}
+      </div>`
+    }
+  ];
+
+  // Build a table-like layout with sections for each tax
+  availableTaxes.forEach((tax) => {
+    const existing = existingMappings.find(
+      (m) => m.destination_tax_id === tax.taxID
+    );
+
+    fields.push({
+      fieldname: `section_${tax.taxID}`,
+      fieldtype: "Section Break",
+      label: `${tax.taxName} (${tax.taxPercent || "N/A"}%) — Tax ID: ${tax.taxID}`,
+    });
+
+    fields.push({
+      fieldname: `tax_field_type_${tax.taxID}`,
+      fieldtype: "Link",
+      label: "Tax Template Type",
+      options: "DocType",
+      link_filters: '[["DocType","name","in",["Sales Taxes and Charges Template","Item Tax Template"]]]',
+      default: existing ? existing.tax_field_type : "",
+      reqd: 0,
+    });
+
+    fields.push({
+      fieldname: `tax_code_${tax.taxID}`,
+      fieldtype: "Dynamic Link",
+      label: "ERPNext Tax Template",
+      options: `tax_field_type_${tax.taxID}`,
+      default: existing ? existing.tax_code : "",
+      reqd: 0,
+    });
+
+    fields.push({
+      fieldname: `is_default_${tax.taxID}`,
+      fieldtype: "Check",
+      label: "Is Default",
+      default: existing ? existing.is_default : 0,
+    });
+  });
+
+  const dialog = new frappe.ui.Dialog({
+    title: __("Map ZIMRA Taxes to ERPNext Templates"),
+    fields: fields,
+    size: "extra-large",
+    primary_action_label: __("Save Mappings"),
+    primary_action: function () {
+      const values = dialog.get_values();
+      const mappings = [];
+
+      availableTaxes.forEach((tax) => {
+        const taxCode = values[`tax_code_${tax.taxID}`];
+        if (!taxCode) return;
+
+        mappings.push({
+          tax_field_type: values[`tax_field_type_${tax.taxID}`],
+          tax_code: taxCode,
+          destination_tax_id: tax.taxID,
+          tax_name: tax.taxName,
+          tax_percent: tax.taxPercent,
+          is_default: values[`is_default_${tax.taxID}`] || 0,
+        });
+      });
+
+      if (mappings.length === 0) {
+        frappe.msgprint(__("No mappings selected."));
+        return;
+      }
+
+      // Save mappings via dedicated function
+      frappe.call({
+        method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.save_tax_mappings",
+        args: {
+          mappings: mappings,
+        },
+        callback: function (r) {
+          if (!r.exc) {
+            frappe.show_alert({
+              message: __("Tax mappings saved successfully."),
+              indicator: "green",
+            });
+            frm.reload_doc();
+          }
+        },
+      });
+
+      dialog.hide();
+    },
+  });
+
+  dialog.show();
+};
+
+/**
+ * Fetch supported currencies from Fiscal Harmony and show mapping dialog
+ */
+const fetchAndMapCurrencies = (frm) => {
+  if (!(frm.doc.api_key && frm.doc.api_secret) || frm.is_dirty()) return;
+
+  frappe.call({
+    method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.fetch_supported_currencies",
+    args: {
+      name: frm.doc.name
+    },
+    callback: function (r) {
+      if (r.exc || !r.message) {
+        frappe.msgprint(__("Failed to fetch supported currencies."));
+        return;
+      }
+      if (r.message.length === 0) {
+        frappe.msgprint(__("No supported currencies found."));
+        return;
+      }
+      showCurrencyMappingDialog(frm, r.message);
+    }
+  });
+};
+
+/**
+ * Show dialog to map ERPNext currencies against Fiscal Harmony currencies
+ */
+const showCurrencyMappingDialog = (frm, supportedCurrencies) => {
+  const existingMappings = frm.doc.currency_mappings || [];
+
+  const currencyOptions = supportedCurrencies.join("\n");
+
+  const fields = [
+    {
+      fieldname: "info_html",
+      fieldtype: "HTML",
+      options: `<div class="text-muted" style="margin-bottom: 12px;">
+        ${__("Map your ERPNext currencies to Fiscal Harmony currencies. Only map currencies you use.")}
+      </div>`
+    }
+  ];
+
+  // For each existing mapping, show a pre-filled row
+  existingMappings.forEach((m, idx) => {
+    fields.push({
+      fieldname: `section_${idx}`,
+      fieldtype: "Section Break",
+      label: `${__("Mapping")} ${idx + 1}`,
+    });
+
+    fields.push({
+      fieldname: `system_currency_${idx}`,
+      fieldtype: "Link",
+      label: "ERPNext Currency",
+      options: "Currency",
+      default: m.system_currency || "",
+      reqd: 0,
+    });
+
+    fields.push({
+      fieldname: `fh_currency_${idx}`,
+      fieldtype: "Select",
+      label: "Fiscal Harmony Currency",
+      options: currencyOptions,
+      default: m.fiscal_harmony_currency || "",
+      reqd: 0,
+    });
+  });
+
+  // Add one empty row for new mappings
+  const newIdx = existingMappings.length;
+  fields.push({
+    fieldname: `section_${newIdx}`,
+    fieldtype: "Section Break",
+    label: __("New Mapping"),
+  });
+
+  fields.push({
+    fieldname: `system_currency_${newIdx}`,
+    fieldtype: "Link",
+    label: "ERPNext Currency",
+    options: "Currency",
+    reqd: 0,
+  });
+
+  fields.push({
+    fieldname: `fh_currency_${newIdx}`,
+    fieldtype: "Select",
+    label: "Fiscal Harmony Currency",
+    options: currencyOptions,
+    reqd: 0,
+  });
+
+  const dialog = new frappe.ui.Dialog({
+    title: __("Map Currencies to Fiscal Harmony"),
+    fields: fields,
+    size: "extra-large",
+    primary_action_label: __("Save Mappings"),
+    primary_action: function () {
+      const values = dialog.get_values();
+      const mappings = [];
+
+      // Collect all rows (existing + new)
+      for (let i = 0; i <= newIdx; i++) {
+        const sysCurrency = values[`system_currency_${i}`];
+        const fhCurrency = values[`fh_currency_${i}`];
+        if (!sysCurrency || !fhCurrency) continue;
+
+        // Find existing ID if updating
+        const existing = existingMappings[i];
+        mappings.push({
+          system_currency: sysCurrency,
+          fiscal_harmony_currency: fhCurrency,
+          currency_id: existing ? existing.currency_id : "",
+        });
+      }
+
+      if (mappings.length === 0) {
+        frappe.msgprint(__("No mappings selected."));
+        return;
+      }
+
+      frappe.call({
+        method: "erpnext_fiscalisation.fiscal_harmony_integration.doctype.fiscal_harmony_settings.fiscal_harmony_settings.save_currency_mappings",
+        args: {
+          mappings: mappings,
+        },
+        callback: function (r) {
+          if (!r.exc) {
+            frappe.show_alert({
+              message: __("Currency mappings saved successfully."),
+              indicator: "green",
+            });
+            frm.reload_doc();
+          }
+        },
+      });
+
+      dialog.hide();
+    },
+  });
+
+  dialog.show();
 };

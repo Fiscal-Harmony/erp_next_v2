@@ -13,7 +13,9 @@
   "tax_field_type",
   "tax_code",
   "column_break_mrcl",
-  "destination_tax_id"
+  "destination_tax_id",
+  "tax_name",
+  "tax_percent"
  ],
  "fields": [
   {
@@ -65,13 +67,29 @@
   },
   {
    "columns": 2,
-   "description": "The tax ID from Fiscal Harmony. Check the device config to view the available options.",
+   "description": "The tax ID from Fiscal Harmony device. Use 'Fetch & Map Taxes' to auto-fill.",
    "fieldname": "destination_tax_id",
    "fieldtype": "Int",
    "in_list_view": 1,
    "label": "Fiscal Harmony Tax ID",
    "non_negative": 1,
    "reqd": 1
+  },
+  {
+   "columns": 2,
+   "fieldname": "tax_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "ZIMRA Tax Name",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "fieldname": "tax_percent",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Tax %",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
