@@ -1,6 +1,6 @@
 [project]
 authors = [
-  {name = "Eskill Trading (Pvt) Ltd", email = "andrew@eskilltrading.com"},
+  {name = "Fiscal harmony", email = "clive@fiscalharmony.co.zw"},
 ]
 dependencies = [
   "jsonschema",
